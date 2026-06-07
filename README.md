@@ -1,119 +1,162 @@
 # release-janitor
 
-CLI do sprzątania obrazów kontenerowych w GHCR (GitHub Container Registry) oraz release'ów na GitHubie.
+A CLI tool to clean up Docker images in GitHub Container Registry (GHCR) and GitHub releases. Supports dry-run previews, flexible filtering by age, tag status, and release type, with colored table output and confirmation prompts before destructive actions.
 
-## Instalacja
+## Installation
 
 ```bash
+# Install globally
 npm install -g release-janitor
-```
 
-Lub uruchom bez instalacji:
-
-```bash
+# Or run without installing
 npx release-janitor <command> [options]
 ```
 
-## Uwierzytelnianie
+## Authentication
 
-Ustaw zmienną środowiskową `GITHUB_TOKEN` z tokenem posiadającym odpowiednie uprawnienia:
+All commands require a GitHub personal access token with appropriate permissions:
 
-- **Obrazy (GHCR):** `read:packages`, `delete:packages`
-- **Release'y:** `repo`
+- **Images (GHCR)**: `read:packages` + `delete:packages`
+- **Releases**: `repo` (or `public_repo` for public repositories only)
+
+Set the token via environment variable (recommended) or the `--token` flag:
 
 ```bash
-export GITHUB_TOKEN=ghp_...
+# Via environment variable
+export GITHUB_TOKEN=ghp_yourtoken
+
+# Via flag
+release-janitor images -o myorg --token ghp_yourtoken
 ```
 
-Alternatywnie przekaż token przez flagę `--token <token>`.
+## Commands
 
-## Komendy
-
-### `images` — Czyszczenie obrazów GHCR
+### `images` — Clean up GHCR container image versions
 
 ```
 release-janitor images [options]
-
-Opcje:
-  -o, --owner <owner>        Nazwa organizacji lub użytkownika GitHub (wymagane)
-  -p, --package <name>       Nazwa pakietu (pominięcie = wszystkie pakiety kontenerowe)
-  -t, --token <token>        Token GitHub (domyślnie: $GITHUB_TOKEN)
-  --dry-run                  Pokaż co zostałoby usunięte, bez usuwania
-  --keep-latest <n>          Zachowaj N najnowszych wersji (domyślnie: 5)
-  --older-than <days>        Usuń tylko wersje starsze niż N dni
-  --untagged                 Usuń tylko wersje bez tagów (dangling)
-  -y, --yes                  Pomiń pytanie o potwierdzenie
-  -h, --help                 Wyświetl pomoc
 ```
 
-#### Przykłady
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-o, --owner <owner>` | GitHub org or user name **(required)** | — |
+| `-p, --package <name>` | Package name (omit to process all container packages) | all packages |
+| `-t, --token <token>` | GitHub token (falls back to `GITHUB_TOKEN`) | — |
+| `--dry-run` | Show what would be deleted without deleting | false |
+| `--keep-latest <n>` | Keep N most recent versions per package | 5 |
+| `--older-than <days>` | Only delete versions older than N days | — |
+| `--untagged` | Only delete untagged/dangling versions | false |
+| `-y, --yes` | Skip confirmation prompt | false |
+
+#### Examples
 
 ```bash
-# Podgląd (dry run) — bez usuwania
+# Preview what would be deleted across all packages (dry run)
 release-janitor images -o myorg --dry-run
 
-# Zachowaj 3 ostatnie wersje obrazu "myapp"
-release-janitor images -o myorg -p myapp --keep-latest 3
+# Clean up a specific package, keeping the 3 most recent versions
+release-janitor images -o myorg -p myimage --keep-latest 3
 
-# Usuń wszystkie obrazy bez tagów starsze niż 30 dni
-release-janitor images -o myorg --untagged --older-than 30
+# Delete untagged images older than 30 days, skip confirmation
+release-janitor images -o myorg --untagged --older-than 30 --yes
 
-# Usuń bez pytania o potwierdzenie
-release-janitor images -o myorg -p myapp --keep-latest 5 --yes
+# Delete all versions older than 90 days (keep none with --keep-latest 0)
+release-janitor images -o myorg -p myimage --older-than 90 --keep-latest 0 --yes
+
+# Process packages owned by a user (not an org)
+release-janitor images -o myuser -p myimage --keep-latest 10 --dry-run
 ```
 
 ---
 
-### `releases` — Czyszczenie release'ów GitHub
+### `releases` — Clean up GitHub releases
 
 ```
 release-janitor releases [options]
-
-Opcje:
-  -o, --owner <owner>        Nazwa organizacji lub użytkownika GitHub (wymagane)
-  -r, --repo <repo>          Nazwa repozytorium (wymagane)
-  -t, --token <token>        Token GitHub (domyślnie: $GITHUB_TOKEN)
-  --dry-run                  Pokaż co zostałoby usunięte, bez usuwania
-  --keep-latest <n>          Zachowaj N najnowszych release'ów (domyślnie: 5)
-  --older-than <days>        Usuń tylko release'y starsze niż N dni
-  --drafts-only              Usuń tylko wersje robocze (draft)
-  --pre-releases-only        Usuń tylko pre-release'y
-  -y, --yes                  Pomiń pytanie o potwierdzenie
-  -h, --help                 Wyświetl pomoc
 ```
 
-#### Przykłady
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-o, --owner <owner>` | GitHub org or user name **(required)** | — |
+| `-r, --repo <repo>` | Repository name **(required)** | — |
+| `-t, --token <token>` | GitHub token (falls back to `GITHUB_TOKEN`) | — |
+| `--dry-run` | Show what would be deleted without deleting | false |
+| `--keep-latest <n>` | Keep N most recent releases | 5 |
+| `--older-than <days>` | Only delete releases older than N days | — |
+| `--drafts-only` | Only delete draft releases | false |
+| `--pre-releases-only` | Only delete pre-releases | false |
+| `-y, --yes` | Skip confirmation prompt | false |
+
+#### Examples
 
 ```bash
-# Podgląd — co zostałoby usunięte
+# Preview what would be deleted (dry run)
 release-janitor releases -o myorg -r myrepo --dry-run
 
-# Zachowaj 10 ostatnich release'ów
+# Keep only the 10 most recent releases
 release-janitor releases -o myorg -r myrepo --keep-latest 10
 
-# Usuń tylko wersje robocze (draft), bez pytania
-release-janitor releases -o myorg -r myrepo --drafts-only --yes
+# Delete all draft releases without keeping any, skip confirmation
+release-janitor releases -o myorg -r myrepo --drafts-only --keep-latest 0 --yes
 
-# Usuń pre-release'y starsze niż 60 dni
+# Delete pre-releases older than 60 days
 release-janitor releases -o myorg -r myrepo --pre-releases-only --older-than 60
+
+# Delete everything older than 180 days without prompting
+release-janitor releases -o myorg -r myrepo --older-than 180 --keep-latest 0 --yes
 ```
 
-## Logika filtrowania
+## Filter Logic
 
-Flagi filtrujące działają jako warunki **AND**:
+All filter flags work as **AND** conditions:
 
-1. `--keep-latest N` — wyklucza N najnowszych wersji z kandydatów do usunięcia
-2. `--older-than <days>` — spośród kandydatów wybiera tylko te starsze niż N dni
-3. `--untagged` / `--drafts-only` / `--pre-releases-only` — dalej zawęża zbiór
+1. `--keep-latest N` — the N newest versions/releases are always excluded from deletion candidates
+2. `--older-than <days>` — further filters candidates to only those older than N days
+3. `--untagged` / `--drafts-only` / `--pre-releases-only` — further narrows the candidate set
 
-Przykład: `--keep-latest 5 --older-than 30 --untagged` usunie tylko obrazy bez tagów, starsze niż 30 dni, spoza 5 najnowszych.
+**Example**: `--keep-latest 5 --older-than 30 --untagged` deletes only untagged images that are both beyond the 5 newest AND older than 30 days.
 
-## Budowanie ze źródeł
+## Output
+
+Before deleting, the tool displays a table of what will be affected:
+
+```
+Package: my-app
+
+  Total versions: 12
+  Will delete 7 version(s):
++------------+----------------------+------------------+------------+
+| ID         | Name/Digest          | Tags             | Created    |
++------------+----------------------+------------------+------------+
+| 123456789  | sha256:abc123def...  | v1.0.0, latest   | 2024-01-15 |
+| 123456788  | sha256:bcd234efa...  | (untagged)       | 2024-01-10 |
++------------+----------------------+------------------+------------+
+
+  Delete 7 version(s) from my-app? [y/N]
+```
+
+Color coding:
+- **Green** — success messages
+- **Red** — items to be deleted / errors
+- **Yellow** — dry-run previews / warnings
+- **Gray** — informational messages
+
+## Development
 
 ```bash
-git clone https://github.com/kjaniec-dev/release-janitor.git
-cd release-janitor
+# Install dependencies
 npm install
+
+# Run in development mode (no build step needed)
+npm run dev -- images -o myorg --dry-run
+
+# Build to dist/
 npm run build
-npm start -- images --help
+
+# Run the built binary
+npm start -- releases -o myorg -r myrepo --dry-run
 ```
+
+## License
+
+MIT
