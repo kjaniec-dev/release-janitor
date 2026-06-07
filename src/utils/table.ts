@@ -1,5 +1,19 @@
 import chalk from "chalk";
 
+// Strip ANSI escape codes for accurate string length measurement
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1B\[[0-9;]*m/g;
+function visibleLength(str: string): number {
+  return str.replace(ANSI_RE, "").length;
+}
+
+// Pad a potentially ANSI-colored string to a visible width
+function padEndVisible(str: string, targetWidth: number): string {
+  const current = visibleLength(str);
+  const padding = Math.max(0, targetWidth - current);
+  return str + " ".repeat(padding);
+}
+
 export interface Column {
   header: string;
   key: string;
@@ -13,11 +27,11 @@ export function printTable(rows: Record<string, string>[], columns: Column[]): v
     return;
   }
 
-  // Calculate column widths
+  // Calculate column widths based on visible (stripped) lengths
   const widths: number[] = columns.map((col) => {
     const maxDataWidth = rows.reduce((max, row) => {
       const val = String(row[col.key] ?? "");
-      return Math.max(max, val.length);
+      return Math.max(max, visibleLength(val));
     }, 0);
     return col.width ?? Math.max(col.header.length, maxDataWidth);
   });
@@ -25,22 +39,20 @@ export function printTable(rows: Record<string, string>[], columns: Column[]): v
   // Build separator
   const sep = "+-" + widths.map((w) => "-".repeat(w)).join("-+-") + "-+";
 
-  // Build header
+  // Build header cells (no ANSI, so plain padEnd is fine)
   const headerCells = columns.map((col, i) =>
     col.header.padEnd(widths[i])
   );
-  const headerRow = "| " + headerCells.join(" | ") + " |";
 
   console.log(chalk.gray(sep));
   console.log(chalk.bold("| " + headerCells.join(" | ") + " |"));
   console.log(chalk.gray(sep));
 
-  // Data rows
+  // Data rows — pad using visible length so ANSI codes don't skew alignment
   for (const row of rows) {
     const cells = columns.map((col, i) => {
       const val = String(row[col.key] ?? "");
-      const padded = val.padEnd(widths[i]);
-      return col.color ? col.color(padded) : padded;
+      return padEndVisible(val, widths[i]);
     });
     console.log("| " + cells.join(" | ") + " |");
   }

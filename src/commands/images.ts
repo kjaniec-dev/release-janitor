@@ -2,7 +2,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { createOctokit } from "../utils/octokit.js";
-import { printTable, formatBytes, formatDate } from "../utils/table.js";
+import { printTable, formatDate } from "../utils/table.js";
 import { confirm } from "../utils/prompt.js";
 import type { Octokit } from "@octokit/rest";
 
@@ -29,24 +29,24 @@ interface PackageVersion {
   };
 }
 
+async function isOrg(octokit: Octokit, owner: string): Promise<boolean> {
+  try {
+    await octokit.orgs.get({ org: owner });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function getPackageVersions(
   octokit: Octokit,
   owner: string,
-  packageName: string
+  packageName: string,
+  useOrg: boolean
 ): Promise<PackageVersion[]> {
   const versions: PackageVersion[] = [];
   let page = 1;
   const perPage = 100;
-
-  // Try org first, fall back to user
-  let useOrg = true;
-
-  try {
-    // Test if owner is an org
-    await octokit.orgs.get({ org: owner });
-  } catch {
-    useOrg = false;
-  }
 
   while (true) {
     try {
@@ -89,18 +89,12 @@ async function getPackageVersions(
 
 async function listContainerPackages(
   octokit: Octokit,
-  owner: string
+  owner: string,
+  useOrg: boolean
 ): Promise<string[]> {
   const names: string[] = [];
   let page = 1;
   const perPage = 100;
-
-  let useOrg = true;
-  try {
-    await octokit.orgs.get({ org: owner });
-  } catch {
-    useOrg = false;
-  }
 
   while (true) {
     try {
@@ -171,7 +165,7 @@ function filterVersions(
   );
 
   const keepLatest = parseInt(opts.keepLatest, 10);
-  // Versions to potentially delete = everything after keepLatest
+  // Versions to potentially delete = everything beyond the N newest
   let candidates = sorted.slice(keepLatest);
 
   // Apply --older-than filter (AND)
@@ -210,6 +204,11 @@ export function registerImagesCommand(program: Command): void {
     .action(async (opts: ImagesOptions) => {
       const octokit = createOctokit(opts.token);
 
+      // Resolve org vs user once upfront
+      const resolveSpinner = ora(chalk.gray(`Resolving ${opts.owner}...`)).start();
+      const useOrg = await isOrg(octokit, opts.owner);
+      resolveSpinner.stop();
+
       // Determine which packages to process
       let packageNames: string[];
 
@@ -218,7 +217,7 @@ export function registerImagesCommand(program: Command): void {
       } else {
         const spinner = ora(chalk.gray(`Listing container packages for ${opts.owner}...`)).start();
         try {
-          packageNames = await listContainerPackages(octokit, opts.owner);
+          packageNames = await listContainerPackages(octokit, opts.owner, useOrg);
           spinner.stop();
         } catch (err: unknown) {
           spinner.stop();
@@ -233,16 +232,10 @@ export function registerImagesCommand(program: Command): void {
         }
 
         console.log(
-          chalk.gray(`Found ${packageNames.length} container package(s): ${packageNames.join(", ")}`)
+          chalk.gray(
+            `Found ${packageNames.length} container package(s): ${packageNames.join(", ")}`
+          )
         );
-      }
-
-      // Determine org vs user once (reused for deletes)
-      let useOrg = true;
-      try {
-        await octokit.orgs.get({ org: opts.owner });
-      } catch {
-        useOrg = false;
       }
 
       let totalToDelete = 0;
@@ -253,10 +246,10 @@ export function registerImagesCommand(program: Command): void {
         console.log(chalk.bold(`\nPackage: ${chalk.cyan(packageName)}`));
 
         // Fetch versions
-        const fetchSpinner = ora(chalk.gray("Fetching versions...")).start();
+        const fetchSpinner = ora(chalk.gray("  Fetching versions...")).start();
         let versions: PackageVersion[];
         try {
-          versions = await getPackageVersions(octokit, opts.owner, packageName);
+          versions = await getPackageVersions(octokit, opts.owner, packageName, useOrg);
           fetchSpinner.stop();
         } catch (err: unknown) {
           fetchSpinner.stop();
@@ -281,16 +274,16 @@ export function registerImagesCommand(program: Command): void {
           const tags = v.metadata?.container?.tags ?? [];
           return {
             id: String(v.id),
+            name: v.name.slice(0, 20),
             tags: tags.length > 0 ? tags.join(", ") : chalk.gray("(untagged)"),
             created: formatDate(v.created_at),
-            name: v.name.slice(0, 20),
           };
         });
 
         console.log(
           opts.dryRun
             ? chalk.yellow(`  Would delete ${toDelete.length} version(s):`)
-            : chalk.red(`  Deleting ${toDelete.length} version(s):`)
+            : chalk.red(`  Will delete ${toDelete.length} version(s):`)
         );
 
         printTable(rows, [
@@ -316,7 +309,7 @@ export function registerImagesCommand(program: Command): void {
         }
 
         // Delete with spinner
-        const deleteSpinner = ora(chalk.gray(`  Deleting...`)).start();
+        const deleteSpinner = ora(chalk.gray(`  Deleting 0/${toDelete.length}...`)).start();
         let deleted = 0;
         let errors = 0;
 
@@ -324,7 +317,7 @@ export function registerImagesCommand(program: Command): void {
           try {
             await deleteVersion(octokit, opts.owner, packageName, version.id, useOrg);
             deleted++;
-            deleteSpinner.text = chalk.gray(`  Deleting... ${deleted}/${toDelete.length}`);
+            deleteSpinner.text = chalk.gray(`  Deleting ${deleted}/${toDelete.length}...`);
           } catch (err: unknown) {
             const error = err as { message?: string };
             errors++;
@@ -358,14 +351,16 @@ export function registerImagesCommand(program: Command): void {
           )
         );
       } else {
-        if (totalDeleted > 0) {
-          console.log(chalk.green(`Summary: Deleted ${totalDeleted} version(s) successfully.`));
-        }
-        if (totalErrors > 0) {
-          console.log(chalk.red(`Summary: ${totalErrors} deletion(s) failed.`));
-        }
-        if (totalDeleted === 0 && totalErrors === 0 && totalToDelete === 0) {
+        if (totalToDelete === 0) {
           console.log(chalk.green("Nothing to delete."));
+        } else if (totalErrors === 0) {
+          console.log(chalk.green(`Summary: Deleted ${totalDeleted} version(s) successfully.`));
+        } else {
+          console.log(
+            chalk.yellow(
+              `Summary: Deleted ${totalDeleted} version(s). ${totalErrors} deletion(s) failed.`
+            )
+          );
         }
       }
     });
